@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenClaw Agent <agent@openclaw.ai>
+Date: Sat, 19 Apr 2026 00:44:00 +0800
+Subject: [PATCH] fix(memory-wiki): preload active memory slot before reading bridge artifacts
+
+Problem:
+- `openclaw wiki status/doctor` commands only activated `memory-wiki` plugin
+- Did not preload the currently selected memory slot plugin
+- Caused `listActiveMemoryPublicArtifacts()` to return empty results
+- Resulted in misleading warning: "Bridge: enabled (0 exported artifacts)"
+
+Root Cause:
+- `resolveManifestActivationPluginIds({kind:'command', command:'wiki'})` only returns `['memory-wiki']`
+- CLI command activation routing does not include slot plugin dependencies
+- `syncMemoryWikiImportedSources` and `resolveMemoryWikiStatus` read memory artifacts
+  without ensuring the memory plugin is loaded
+
+Solution:
+- Add helper `ensureActiveMemoryPluginLoaded(appConfig)` that:
+  1. Reads `plugins.slots.memory` from config
+  2. Falls back to `defaultSlotIdForKey('memory')` (i.e., 'memory-core')
+  3. Calls `loadOpenClawPlugins({config, cache:false, onlyPluginIds:[slotId]})`
+- Call this helper before reading artifacts in:
+  - `syncMemoryWikiBridgeSources()`
+  - `resolveMemoryWikiStatus()`
+
+Impact:
+- Minimal: only affects bridge mode wiki commands
+- No gateway restart required
+- Fixes misleading "0 exported artifacts" warning
+
+Files changed:
+- extensions/memory-wiki/src/cli.ts (compiled to dist/cli-tAKZ-1z5.js)
+
+---
+ extensions/memory-wiki/src/cli.ts | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/extensions/memory-wiki/src/cli.ts b/extensions/memory-wiki/src/cli.ts
+index 0000000..0000000 100644
+--- a/extensions/memory-wiki/src/cli.ts
++++ b/extensions/memory-wiki/src/cli.ts
+@@ -1,3 +1,5 @@
++import { loadOpenClawPlugins } from "../../loader.js";
++import { defaultSlotIdForKey } from "../../slots.js";
+ import { listActiveMemoryPublicArtifacts } from "../../memory-state.js";
+ 
+@@ -25,6 +27,22 @@ async function syncMemoryWikiBridgeSources(params: SyncMemoryWikiBridgeSourcesPa
+ 	if (params.config.vaultMode !== "bridge" || !params.config.bridge.enabled || !params.config.bridge.readMemoryArtifacts || !params.appConfig) {
+ 		return { importedCount: 0, updatedCount: 0, skippedCount: 0, removedCount: 0, artifactCount: 0, workspaces: 0, pagePaths: [] };
+ 	}
++	
++	await ensureActiveMemoryPluginLoaded(params.appConfig);
++	
+ 	const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
+ 	// ... rest of function
+ }
+ 
++/**
++ * Ensure the active memory slot plugin is loaded before reading artifacts.
++ * 
++ * CLI command activation only loads plugins that declare the command (e.g., memory-wiki),
++ * not slot-owned dependencies. This helper preloads the selected memory plugin so
++ * listActiveMemoryPublicArtifacts() returns correct results.
++ */
++async function ensureActiveMemoryPluginLoaded(appConfig: any): Promise<void> {
++	const selectedMemoryPluginId = appConfig?.plugins?.slots?.memory ?? defaultSlotIdForKey("memory");
++	if (typeof selectedMemoryPluginId !== "string" || selectedMemoryPluginId.trim().length === 0) return;
++	
++	await loadOpenClawPlugins({
++		config: appConfig,
++		cache: false,
++		onlyPluginIds: [selectedMemoryPluginId]
++	});
++}
++
+ async function resolveMemoryWikiStatus(config: ResolvedMemoryWikiConfig, deps?: ResolveMemoryWikiStatusDeps) {
+ 	const vaultExists = await (deps?.pathExists ?? pathExists)(config.vault.path);
++	
++	// Preload memory slot before reading bridge artifact count
++	if (deps?.appConfig && config.vaultMode === "bridge" && config.bridge.enabled) {
++		await ensureActiveMemoryPluginLoaded(deps.appConfig);
++	}
++	
+ 	const bridgePublicArtifactCount = deps?.appConfig && config.vaultMode === "bridge" && config.bridge.enabled
+ 		? (await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({ cfg: deps.appConfig })).length
+ 		: null;
+-- 
+2.45.0
