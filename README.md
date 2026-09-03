@@ -4,6 +4,29 @@ This repository contains patches and hotfixes for OpenClaw that haven't been ups
 
 ## Patch List
 
+### kimi-k3-tool-call-markup/
+
+**Issue**: Kimi K3 can emit tool calls as ChatML-style text markup. The stock parser in `@openclaw/kimi-provider` can drop an entire assistant turn when one call segment is malformed, can leak partial protocol markers into visible text, and strips thinking signatures during replay.
+
+**Purpose**:
+- Parse tagged tool calls with per-call fault tolerance
+- Normalize names such as `functions.exec:3` while preserving raw ids for tool-result pairing
+- Prevent tool-call markup from leaking into visible assistant text
+- Preserve thinking signatures and reject empty signatures for K3 replay compatibility
+
+**Files included**:
+- `plugin/` — full patched local copy of `@openclaw/kimi-provider` `2026.8.2`
+- `ops/` — idempotent parser installer and post-upgrade reapply script
+- `docs/design-and-test-plan.md` — root-cause analysis, invariants, tests, rollback
+
+**Verification**:
+```powershell
+node %USERPROFILE%\.openclaw\extensions\kimi\dist\tool-call-markup.test.mjs
+# Expected: 34 passed, 0 failed
+```
+
+**Status**: Local patched copy published 2026-09-03; upstream PR pending.
+
 ### memory-wiki-cli-slot-loading.patch
 
 **Issue**: `openclaw wiki status/doctor` shows misleading warning "Bridge: enabled (0 exported artifacts)" when memory plugin is working correctly.
